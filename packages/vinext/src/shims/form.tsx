@@ -22,7 +22,7 @@ import {
   forwardRef,
   useActionState,
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useRef,
   type FormHTMLAttributes,
   type ForwardedRef,
@@ -35,6 +35,7 @@ import { useMergedRef } from "./use-merged-ref.js";
 import { runAfterAppPrefetchRevalidationCooldown } from "./internal/app-prefetch-fetch-queue.js";
 import {
   getMountedSlotsHeader,
+  getPrefetchCache,
   getPrefetchInterceptionContext,
   getPrefetchedUrls,
   hasPrefetchCacheEntryForNavigation,
@@ -305,8 +306,10 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
   // Viewport-based prefetch: when the form enters the viewport, prefetch the
   // RSC payload for the action URL. App Router only; disabled in dev (matches
   // Next.js behavior). Gated by `prefetch !== false` and string action.
-  // Reference: link.tsx IntersectionObserver wiring pattern.
-  useEffect(() => {
+  // Reference: link.tsx IntersectionObserver wiring pattern. A layout effect, as
+  // in link.tsx, so unmounting drops a prefetch the revalidation cooldown holds
+  // in the commit that detaches the form, before the cooldown can release it.
+  useLayoutEffect(() => {
     if (typeof action !== "string") return;
     if (prefetch === false || process.env.NODE_ENV !== "production") return;
     // External destinations remain valid form markup and native navigation
@@ -318,6 +321,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
     if (typeof IntersectionObserver === "undefined") return;
 
     let active = true;
+    let releaseHeldReservation: (() => void) | undefined;
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
@@ -349,6 +353,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
                 headers.set(VINEXT_MOUNTED_SLOTS_HEADER, mountedSlotsHeader);
               }
               const rscUrl = await createRscRequestUrl(prefetchHref, headers);
+              if (!active) return;
               const cacheKey = AppElementsWire.encodeCacheKey(rscUrl, interceptionContext);
               // Dedup: skip if already in-flight or a fresh cache entry exists,
               // matching the gate link.tsx applies to avoid double-fetching a
@@ -369,12 +374,14 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
               )
                 return;
               prefetched.add(cacheKey);
+              let sent = false;
               const fetchPromise = runAfterAppPrefetchRevalidationCooldown(() => {
                 // The form unmounted or changed its action while the
                 // revalidation cooldown held the request.
                 if (!active) {
                   throw new DOMException("Prefetch is no longer wanted", "AbortError");
                 }
+                sent = true;
                 return fetch(rscUrl, {
                   headers,
                   credentials: "include",
@@ -396,6 +403,14 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
                   optimisticRouteShell: true,
                 },
               );
+              // A replacement form with the same action can enter the viewport
+              // while the held request waits to be dropped; let it prefetch.
+              const reservation = getPrefetchCache().get(cacheKey);
+              releaseHeldReservation = () => {
+                if (!sent && getPrefetchCache().get(cacheKey) === reservation) {
+                  prefetched.delete(cacheKey);
+                }
+              };
             })();
             observer.unobserve(node);
           }
@@ -406,6 +421,7 @@ const Form = forwardRef(function Form(props: FormProps, ref: ForwardedRef<HTMLFo
     observer.observe(node);
     return () => {
       active = false;
+      releaseHeldReservation?.();
       observer.unobserve(node);
     };
     // `actionHref` is derived purely from `action` (+ the module-constant

@@ -186,44 +186,65 @@ export async function invokeClientServerAction(
     responseUrl: fetchResponse.url,
   });
   const fetchResponseIsRsc = actionResultFacts.isRscContentType;
+  const revalidation = parseServerActionRevalidationHeader(fetchResponse.headers);
+  // Next.js invalidates and starts the cooldown once the action response is
+  // decoded (server-action-reducer.ts), so the window ends 300ms after the
+  // action completes. The cooldown starts first so it holds the re-prefetches
+  // the cache clear triggers.
+  const invalidateAfterRevalidation = () => {
+    if (revalidation === "none") return;
+    startAppPrefetchRevalidationCooldown();
+    deps.clearClientNavigationCaches();
+  };
   const actionResultDecision = deps.navigationPlanner.classifyServerActionResult(actionResultFacts);
   if (
     applyServerActionResultDecision(
       actionResultDecision,
-      () => deps.clearClientNavigationCaches(),
-      (url, historyMode) => deps.performHardNavigation(url, historyMode),
+      () => {
+        if (revalidation === "none") deps.clearClientNavigationCaches();
+      },
+      (url, historyMode) => {
+        // The loop guard can refuse the navigation and keep this document.
+        invalidateAfterRevalidation();
+        deps.performHardNavigation(url, historyMode);
+      },
     )
   ) {
     return undefined;
   }
+  let result: ServerActionResult | AppWireElements;
+  try {
+    const invalidResponseError = await readInvalidServerActionResponseError(
+      fetchResponse.clone(),
+      actionRedirectTarget !== null,
+    );
+    if (invalidResponseError) throw invalidResponseError;
+    if (actionRedirectTarget && !fetchResponseIsRsc) {
+      // The loop guard can refuse the navigation and keep this document.
+      invalidateAfterRevalidation();
+      deps.performHardNavigation(actionRedirectTarget.href);
+      return undefined;
+    }
 
-  const revalidation = parseServerActionRevalidationHeader(fetchResponse.headers);
-  if (revalidation !== "none") {
-    startAppPrefetchRevalidationCooldown();
-    deps.clearClientNavigationCaches();
+    const flightResponse =
+      fetchResponse.status === 303
+        ? new Response(fetchResponse.body, {
+            headers: fetchResponse.headers,
+            status: 200,
+            statusText: "OK",
+          })
+        : fetchResponse;
+    result = await createFromFetch<ServerActionResult | AppWireElements>(
+      Promise.resolve(flightResponse),
+      { temporaryReferences },
+    );
+  } catch (error) {
+    // The server revalidated even though its response can't be used, so the
+    // caches still hold data from before the revalidation.
+    invalidateAfterRevalidation();
+    throw error;
   }
-  const invalidResponseError = await readInvalidServerActionResponseError(
-    fetchResponse.clone(),
-    actionRedirectTarget !== null,
-  );
-  if (invalidResponseError) throw invalidResponseError;
-  if (actionRedirectTarget && !fetchResponseIsRsc) {
-    deps.performHardNavigation(actionRedirectTarget.href);
-    return undefined;
-  }
-
-  const flightResponse =
-    fetchResponse.status === 303
-      ? new Response(fetchResponse.body, {
-          headers: fetchResponse.headers,
-          status: 200,
-          statusText: "OK",
-        })
-      : fetchResponse;
-  const result = await createFromFetch<ServerActionResult | AppWireElements>(
-    Promise.resolve(flightResponse),
-    { temporaryReferences },
-  );
+  invalidateAfterRevalidation();
   if (
     revalidation === "none" &&
     shouldClearClientNavigationCachesForServerActionResult(result, revalidation)

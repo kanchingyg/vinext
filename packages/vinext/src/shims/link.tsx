@@ -1488,6 +1488,12 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       }
       void promotePrefetchEntriesForNavigation(normalizedHref);
     }
+    const owner = instance?.routerMode === "app" ? instance : undefined;
+    // Next.js ignores intent on a Link that isn't visible yet
+    // (rescheduleLinkPrefetch in client/components/links.ts). Without an
+    // IntersectionObserver, which every supported browser has, a Link isn't
+    // observed and keeps its intent prefetch.
+    if (owner && !owner.isVisible) return;
     prefetchUrl(
       normalizedHref,
       intentMode,
@@ -1497,7 +1503,7 @@ const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
       // Like Next.js's rescheduled intent task, the request is dropped if the
       // Link leaves before it starts, e.g. while the revalidation cooldown
       // holds it.
-      instance?.isVisible && instance.routerMode === "app" ? instance : undefined,
+      owner,
     );
   }, [
     effectivePrefetchProp,
