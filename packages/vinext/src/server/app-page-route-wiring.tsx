@@ -49,10 +49,16 @@ import {
   registerAppElementRenderDependencies,
   renderAfterAppDependencies,
   renderAppComponentWithDependencyBarrier,
+  type AppComponentSettledCallback,
   type AppPageRenderDependency,
   type AppRenderDependency,
 } from "./app-render-dependency.js";
-import { APP_PAGE_NOT_FOUND_BOUNDARY_ID, tagAppPageSlotError } from "./app-page-execution.js";
+import {
+  APP_PAGE_NOT_FOUND_BOUNDARY_ID,
+  tagAppPageLayoutError,
+  tagAppPageSlotError,
+} from "./app-page-execution.js";
+import { createAppPageLayoutGate, registerAppPageLayoutGate } from "./app-page-layout-gate.js";
 import {
   resolveAppPageBranchParams,
   resolveAppPageSegmentParamScopeKeys,
@@ -325,6 +331,37 @@ function createSlotLayoutElement(
       tagAppPageSlotError(error, slotLayoutIndex, notFoundBoundary),
     );
   return <SlotLayoutInvoker />;
+}
+
+/**
+ * A route layout, whose notFound(), forbidden() and unauthorized() are caught
+ * above it: its own boundaries wrap only its `children`. The layout's index
+ * tags what it throws, so the response's fallback finds that boundary from the
+ * render. `onSettled` hears how the layout rendered.
+ * https://github.com/vercel/next.js/blob/canary/packages/next/src/server/app-render/create-component-tree.tsx
+ */
+function createRouteLayoutElement(
+  LayoutComponent: AppPageComponent,
+  props: Readonly<Record<string, unknown>>,
+  layoutIndex: number,
+  dependency: AppRenderDependency | undefined,
+  onSettled: AppComponentSettledCallback | undefined,
+): ReactNode {
+  const mapError = (error: unknown) => tagAppPageLayoutError(error, layoutIndex);
+  if (dependency) {
+    return renderAppComponentWithDependencyBarrier(
+      LayoutComponent,
+      props,
+      dependency,
+      mapError,
+      onSettled,
+    );
+  }
+  if (isReactOwnedAppComponent(LayoutComponent)) return <LayoutComponent {...props} />;
+  const RouteLayoutInvoker = () =>
+    invokeAppComponentMappingErrors(LayoutComponent, props, mapError, onSettled);
+  RouteLayoutInvoker.displayName = LayoutComponent.displayName ?? LayoutComponent.name;
+  return <RouteLayoutInvoker />;
 }
 
 /**
@@ -1179,6 +1216,7 @@ export function buildAppPageElements<
     (entry) => entry.unauthorizedModule,
     rootUnauthorizedModule ? null : DEFAULT_UNAUTHORIZED_COMPONENT,
   );
+  const layoutGate = createAppPageLayoutGate();
   const layoutDependenciesByIndex = new Map<number, AppRenderDependency>();
   const renderDependenciesByElementId = new Map<string, AppRenderDependency>();
   const layoutDependenciesBefore: AppRenderDependency[][] = [];
@@ -1532,19 +1570,26 @@ export function buildAppPageElements<
     }
 
     const LayoutComponent = layoutComponent;
-    const layoutDependency = layoutDependenciesByIndex.get(index);
-    let layoutElement: ReactNode = layoutDependency ? (
-      renderAppComponentWithDependencyBarrier(
-        LayoutComponent,
-        withUseCacheLayoutMarker(LayoutComponent, { ...layoutProps, children: <Children /> }),
-        layoutDependency,
-      )
-    ) : (
-      <LayoutComponent {...withUseCacheLayoutMarker(LayoutComponent, layoutProps)}>
-        <Children />
-      </LayoutComponent>
-    );
     const ancestorLoadingEntry = findNearestAncestorLoadingEntry(layoutEntry.treePosition);
+    // A client layout renders outside the RSC render, so it holds nothing.
+    const holdsResponse = !ancestorLoadingEntry && !isReactOwnedAppComponent(LayoutComponent);
+    if (holdsResponse) layoutGate.hold(layoutEntry.id, index);
+    let layoutElement = createRouteLayoutElement(
+      LayoutComponent,
+      withUseCacheLayoutMarker(LayoutComponent, { ...layoutProps, children: <Children /> }),
+      index,
+      layoutDependenciesByIndex.get(index),
+      holdsResponse ? (failure) => layoutGate.settle(layoutEntry.id, failure) : undefined,
+    );
+    // Next.js gives each segment its own RedirectBoundary, inside its loading
+    // boundary. A redirect() streamed in the payload, such as one a component
+    // the layout renders throws, is then followed once the navigation has
+    // committed, with the layouts above still mounted.
+    layoutElement = (
+      <RedirectBoundary resetKey={resolveRouteSegmentResetKey(layoutEntry.treePosition)}>
+        {layoutElement}
+      </RedirectBoundary>
+    );
     const ancestorLoadingComponent = getDefaultExport(ancestorLoadingEntry?.loadingModule);
     if (
       ancestorLoadingComponent &&
@@ -2397,5 +2442,6 @@ export function buildAppPageElements<
       : {},
   );
   registerAppElementRenderDependencies(elements, renderDependenciesByElementId);
+  registerAppPageLayoutGate(elements, layoutGate);
   return elements;
 }
