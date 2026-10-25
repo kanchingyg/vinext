@@ -29,7 +29,7 @@ if (!nextjsDir) {
 const file = path.join(nextjsDir, "test/lib/e2e-utils/index.ts");
 const FROM = "if (options.skipDeployment) {";
 const TO =
-  "if (options.skipDeployment && process.env.VINEXT_RUN_SKIPPED_DEPLOYMENT_TESTS !== '1') {";
+  "if (options.skipDeployment && (process.env.VINEXT_RUN_SKIPPED_DEPLOYMENT_TESTS ?? '1') !== '1') {";
 
 const source = fs.readFileSync(file, "utf8");
 if (source.includes(TO)) process.exit(0);
