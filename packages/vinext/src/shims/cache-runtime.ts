@@ -1033,6 +1033,7 @@ export function registerCachedFunction<TArgs extends unknown[], TResult>(
         return collectedResult ? collectedResult.result : result;
       };
 
+      console.log("[dbg] use-cache read", id, existing?.cacheState ?? (existing ? "fresh" : "miss"), "servable", isServableCacheState(existing?.cacheState), "pending", _hasPendingRevalidatedTag([...(existing?.value?.tags ?? []), ...softTags]), "bgmode", shouldServeStaleUnstableCacheEntry(), "probe", isRouteCacheabilityProbe(), Date.now());
       if (
         existing?.value &&
         existing.value.kind === "FETCH" &&

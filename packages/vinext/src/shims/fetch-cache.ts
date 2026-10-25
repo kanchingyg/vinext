@@ -1484,6 +1484,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
           mustBypassPendingRevalidation = true;
           cached = null;
         }
+        console.log("[dbg] fetch read", cacheKey.slice(0,10), cached ? (cached.cacheState ?? "fresh") : "miss", "fg", shouldRefreshStaleFetchInForeground(), Date.now());
         // Like Next.js, an entry past its `expire` is a miss.
         if (cached?.cacheState === "expired") cached = null;
         if (cached?.value && cached.value.kind === "FETCH" && cached.cacheState !== "stale") {
@@ -1528,6 +1529,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
           if (!pendingRefetches.has(cacheKey)) {
             const refetchPromise = originalFetch(input, fetchInit)
               .then(async (freshResp) => {
+                console.log("[dbg] fetch bg refetch done", freshResp.status, (await freshResp.clone().text()).slice(0, 40), Date.now());
                 await writeFetchCacheResponse(
                   handler,
                   cacheKey,

@@ -797,7 +797,8 @@ BUILD_ID="$(read_build_id)"
 
 echo "${PORT}" > "${PORT_FILE}"
 
-"${VINEXT_BIN}" start --port "${PORT}" --hostname 127.0.0.1 >> "${SERVER_LOG}" 2>&1 &
+mkdir -p "${DEBUG_ROOT_DIR}"
+NEXT_PRIVATE_DEBUG_CACHE=1 "${VINEXT_BIN}" start --port "${PORT}" --hostname 127.0.0.1 >> "${DEBUG_ROOT_DIR}/server-$(basename "$(pwd)")-${PORT}.log" 2>&1 &
 SERVER_PID="$!"
 echo "${SERVER_PID}" > "${PID_FILE}"
 
