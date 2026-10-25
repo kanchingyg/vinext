@@ -83,7 +83,12 @@ async function main() {
     if (arg === "--filter" && i + 1 < process.argv.length) {
       filter = process.argv[++i];
     } else if (arg === "--match" && i + 1 < process.argv.length) {
-      for (const part of process.argv[++i].split(",")) {
+      const raw = process.argv[++i];
+      const expanded =
+        raw === "@cc-hidden"
+          ? "test/e2e/app-dir/use-cache/use-cache.test.ts,test/e2e/app-dir/use-cache-custom-handler,test/e2e/app-dir/use-cache-hanging-inputs,test/e2e/app-dir/use-cache-search-params,test/e2e/app-dir/use-cache-swr,test/e2e/app-dir/use-cache-close-over-function,test/e2e/app-dir/cache-components,test/e2e/app-dir/cache-components-dynamic-imports,test/e2e/app-dir/cache-components-request-apis,test/e2e/app-dir/ppr-metadata-blocking/ppr-metadata-blocking-ppr-fallback.test.ts,test/e2e/app-dir/ppr-partial-hydration,test/e2e/app-dir/resume-data-cache"
+          : raw;
+      for (const part of expanded.split(",")) {
         const trimmed = part.trim();
         if (trimmed) matches.push(trimmed);
       }
