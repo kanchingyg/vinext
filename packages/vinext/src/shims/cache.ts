@@ -184,7 +184,7 @@ export function revalidatePath(path: string, type?: "page" | "layout"): undefine
   const stem = path.endsWith("/") ? path.slice(0, -1) : path;
   const tag = type ? `_N_T_${stem}/${type}` : `_N_T_${stem || "/"}`;
   const encodedTag = encodeCacheTag(tag);
-  console.log("[dbg] revalidateTag", tag, JSON.stringify(profile), JSON.stringify(durations), Date.now());
+  console.log("[dbg] other tag invalidation", tag, Date.now());
   _markPendingRevalidatedTag(encodedTag);
   if (isPathKnownNotEdgeCached(stem || "/")) {
     // Only force-dynamic routes serve this path, so no edge entry carries the
@@ -230,7 +230,7 @@ export function updateTag(tag: string): undefined {
   markActionRevalidation(ACTION_DID_REVALIDATE_STATIC_AND_DYNAMIC);
   // Expire the tag immediately (same as revalidateTag without SWR)
   const encodedTag = encodeCacheTag(tag);
-  console.log("[dbg] revalidateTag", tag, JSON.stringify(profile), JSON.stringify(durations), Date.now());
+  console.log("[dbg] other tag invalidation", tag, Date.now());
   _markPendingRevalidatedTag(encodedTag);
   return scheduleTagInvalidation(encodedTag);
 }
